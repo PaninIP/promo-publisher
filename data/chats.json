@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Второй аккаунт — тест",
+    "target": 1323344139,
+    "enabled": true
+  },
+  {
+    "name": "Реклама Telegram-проектов",
+    "target": -1001234567890,
+    "enabled": true
+  },
+  {
+    "name": "Чат разработчиков",
+    "target": "@public_chat_username",
+    "enabled": true
+  },
+  {
+    "name": "Временно отключённый чат",
+    "target": -1009876543210,
+    "enabled": false
+  }
+]

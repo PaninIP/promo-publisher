@@ -1,0 +1,25 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+
+# Environment
+.env
+
+# Telegram authorization
+*.session
+*.session-journal
+*.session-shm
+*.session-wal
+
+# Runtime state
+data/message_state.json
+data/publication_history.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
