@@ -1,9 +1,14 @@
-# Python
+# Virtual environment
 .venv/
+
+# Python
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Environment and secrets
+# Secrets
 .env
 
 # Telegram authorization
@@ -12,17 +17,16 @@ __pycache__/
 *.session-shm
 *.session-wal
 
-# Runtime state and logs
+# Runtime state
 data/message_state.json
-data/publication_history.json
+data/message_state.json.tmp
 data/publication_history.jsonl
 data/runtime_state.json
-*.log
 
 # IDE
 .vscode/
 .idea/
 
-# OS
+# Operating system
 .DS_Store
 Thumbs.db
