@@ -65,7 +65,6 @@ async def main() -> None:
 
         print("Сессия Telegram готова к работе.")
 
-
     finally:
         await client.disconnect()
 

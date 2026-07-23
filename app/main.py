@@ -156,6 +156,14 @@ async def run_single_cycle(
     print()
     print(format_settings(loaded))
 
+    if (arguments.send or arguments.daemon) and not settings.publication_enabled:
+        print()
+        print(
+            "Публикация не запущена: "
+            "PUBLICATION_ENABLED=false."
+        )
+        return
+
     targets = await load_targets(
         client=client,
         folder_name=settings.telegram_folder_name,
@@ -177,14 +185,6 @@ async def run_single_cycle(
         print("Режим предпросмотра: сообщения не отправлены.")
         print("Для одного цикла добавь --send.")
         print("Для постоянной работы на VPS добавь --daemon.")
-        return
-
-    if not settings.publication_enabled:
-        print()
-        print(
-            "Публикация не запущена: "
-            "PUBLICATION_ENABLED=false."
-        )
         return
 
     if require_confirmation and not arguments.yes:

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from telethon import TelegramClient, utils
+from telethon import TelegramClient, errors, utils
 from telethon.tl.functions.messages import GetDialogFiltersRequest
 from telethon.tl.types import Channel, Chat, User
 
@@ -146,7 +146,14 @@ async def load_publication_targets(
 
         processed_peer_keys.add(peer_key)
 
-        entity = await client.get_entity(peer)
+        try:
+            entity = await client.get_entity(peer)
+        except (errors.RPCError, TypeError, ValueError) as error:
+            print(
+                "[ПРОПУЩЕНО] Не удалось получить чат из папки "
+                f'"{folder_name}": {type(error).__name__}: {error}'
+            )
+            continue
 
         targets.append(
             PublicationTarget(

@@ -1,0 +1,8 @@
+warning: in the working copy of '.env.example', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of '.gitignore', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'README.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/auth.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/folder_targets.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/main.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'app/messages.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'data/messages.json', LF will be replaced by CRLF the next time Git touches it
