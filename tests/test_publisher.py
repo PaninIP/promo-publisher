@@ -1,7 +1,7 @@
 import sys
 import types
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 try:
@@ -85,6 +85,8 @@ def make_settings(*, enabled: bool) -> LoadedSettings:
             publication_delay_max_seconds=0,
             publication_interval_min_minutes=60,
             publication_interval_max_minutes=90,
+            publication_message_gate_enabled=False,
+            publication_min_new_messages=10,
             telegram_folder_name="Реклама",
             promo_bot_username="@example_bot",
         ),
@@ -129,6 +131,49 @@ class PublicationKillSwitchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(client.send_calls, 0)
         self.assertTrue(summary.disabled_by_config)
+        self.assertEqual(summary.successful, 0)
+
+
+    @patch("app.publisher.append_history")
+    @patch("app.publisher.check_message_gate", new_callable=AsyncMock)
+    async def test_message_gate_prevents_send(
+        self,
+        gate_mock: AsyncMock,
+        _append_history,
+    ) -> None:
+        from app.message_gate import MessageGateStatus
+
+        client = FakeClient()
+        loaded = make_settings(enabled=True)
+        loaded = LoadedSettings(
+            settings=RuntimeSettings(
+                **{
+                    **loaded.settings.__dict__,
+                    "publication_message_gate_enabled": True,
+                    "publication_min_new_messages": 10,
+                }
+            ),
+            source="test",
+        )
+        gate_mock.return_value = MessageGateStatus(
+            allowed=False,
+            new_message_count=4,
+            required_message_count=10,
+            last_sent_message_id=123,
+        )
+
+        async def settings_loader() -> LoadedSettings:
+            return loaded
+
+        summary = await publish_plan(
+            client=client,
+            plan=make_plan(),
+            settings_loader=settings_loader,
+            config_check_seconds=1,
+        )
+
+        self.assertEqual(client.send_calls, 0)
+        self.assertEqual(summary.skipped_by_message_gate, 1)
         self.assertEqual(summary.successful, 0)
 
     async def test_invalid_remote_config_prevents_send(self) -> None:

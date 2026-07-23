@@ -12,6 +12,7 @@
 - отдельная ротация шаблонов для каждого чата без повторов до исчерпания пула;
 - предпросмотр, один ручной цикл и постоянный режим для VPS;
 - настраиваемая пауза между чатами и интервал между циклами;
+- обязательный порог новых сообщений после предыдущей публикации;
 - удалённая конфигурация через сообщение в «Избранном»;
 - аварийный выключатель `PUBLICATION_ENABLED=false`;
 - повторная проверка выключателя перед каждой отправкой и во время ожидания;
@@ -24,6 +25,7 @@
 - `app/discover_chats.py` — просмотр доступных диалогов;
 - `app/folder_targets.py` — загрузка получателей из Telegram-папки;
 - `app/messages.py` — загрузка и ротация шаблонов;
+- `app/message_gate.py` — подсчёт новых сообщений после прошлой публикации;
 - `app/publisher.py` — контролируемая отправка и журналирование;
 - `app/settings.py` — локальная и удалённая конфигурация;
 - `app/main.py` — точка запуска;
@@ -61,6 +63,9 @@ PUBLICATION_DELAY_MAX_SECONDS=30
 
 PUBLICATION_INTERVAL_MIN_MINUTES=60
 PUBLICATION_INTERVAL_MAX_MINUTES=90
+
+PUBLICATION_MESSAGE_GATE_ENABLED=true
+PUBLICATION_MIN_NEW_MESSAGES=10
 
 TELEGRAM_FOLDER_NAME=Реклама
 PROMO_BOT_USERNAME=@your_bot_username
@@ -120,7 +125,7 @@ uv run python -m app.main --send --yes
 uv run python -m app.main --daemon
 ```
 
-При старте постоянного режима первый цикл выполняется сразу, если `PUBLICATION_ENABLED=true`. После завершения цикла приложение ждёт случайный интервал из конфигурации.
+При старте постоянного режима первый цикл проверки выполняется сразу, если `PUBLICATION_ENABLED=true`. Повторная публикация в конкретный чат происходит только тогда, когда одновременно прошёл временной интервал и после предыдущего сообщения аккаунта появилось не меньше `PUBLICATION_MIN_NEW_MESSAGES` чужих содержательных сообщений. Исходящие сообщения текущего аккаунта и служебные события Telegram не учитываются. Для чата без истории разрешается первая публикация.
 
 ## Проверка
 
@@ -130,7 +135,7 @@ uv run python -m unittest discover -s tests -v
 uv run python -c "from app.messages import load_messages; print(len(load_messages()))"
 ```
 
-Ожидается 10 успешных тестов и число `100`.
+Ожидается успешное прохождение всех тестов и число `100`.
 
 ## Runtime-файлы
 
@@ -138,6 +143,7 @@ uv run python -c "from app.messages import load_messages; print(len(load_message
 
 - `data/message_state.json` — история использованных шаблонов отдельно для каждого чата;
 - `data/publication_history.jsonl` — журнал результатов;
+- `data/message_gate_state.json` — ID последней публикации для каждого чата;
 - `data/promo_publisher.session` — Telegram-сессия.
 
 Эти файлы исключены из Git.

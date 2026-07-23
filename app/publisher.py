@@ -11,6 +11,10 @@ from pathlib import Path
 from telethon import TelegramClient, errors
 
 from app.folder_targets import PublicationTarget
+from app.message_gate import (
+    check_message_gate,
+    save_last_sent_message_id,
+)
 from app.messages import (
     PromoMessage,
     choose_message,
@@ -37,6 +41,7 @@ class PublicationSummary:
     failed: int = 0
     aborted_reason: str | None = None
     disabled_by_config: bool = False
+    skipped_by_message_gate: int = 0
 
 
 def filter_allowed_targets(
@@ -184,8 +189,9 @@ async def publish_plan(
         raise ValueError("config_check_seconds должен быть больше нуля")
 
     summary = PublicationSummary()
+    attempted_publications = 0
 
-    for index, publication in enumerate(plan):
+    for publication in plan:
         try:
             loaded = await load_active_settings(settings_loader)
         except RemoteConfigError as error:
@@ -212,7 +218,53 @@ async def publish_plan(
             print(f"[ОСТАНОВКА] {summary.aborted_reason}")
             break
 
-        if index > 0:
+        if settings.publication_message_gate_enabled:
+            try:
+                gate_status = await check_message_gate(
+                    client=client,
+                    entity=publication.target.peer,
+                    target_id=publication.target.peer_id,
+                    required_message_count=(
+                        settings.publication_min_new_messages
+                    ),
+                )
+            except (errors.RPCError, ValueError, RuntimeError) as error:
+                summary.failed += 1
+                error_text = (
+                    "Не удалось проверить количество новых сообщений: "
+                    f"{type(error).__name__}: {error}"
+                )
+                append_history(
+                    publication=publication,
+                    status="message_gate_error",
+                    error=error_text,
+                )
+                print(
+                    f"[ПРОПУЩЕНО] {publication.target.name}: "
+                    f"{error_text}"
+                )
+                continue
+
+            if not gate_status.allowed:
+                summary.skipped_by_message_gate += 1
+                wait_text = (
+                    "после прошлой публикации появилось "
+                    f"{gate_status.new_message_count} из "
+                    f"{gate_status.required_message_count} "
+                    "необходимых сообщений"
+                )
+                append_history(
+                    publication=publication,
+                    status="waiting_for_new_messages",
+                    error=wait_text,
+                )
+                print(
+                    f"[ОЖИДАНИЕ] {publication.target.name}: "
+                    f"{wait_text}."
+                )
+                continue
+
+        if attempted_publications > 0:
             delay = random.randint(
                 settings.publication_delay_min_seconds,
                 settings.publication_delay_max_seconds,
@@ -261,6 +313,8 @@ async def publish_plan(
                 )
                 print(f"[ОСТАНОВКА] {summary.aborted_reason}")
                 break
+
+        attempted_publications += 1
 
         print()
         print(
@@ -338,6 +392,17 @@ async def publish_plan(
             print(
                 "[ПРЕДУПРЕЖДЕНИЕ] Сообщение отправлено, но состояние "
                 f"шаблонов не сохранено: {state_error}"
+            )
+
+        try:
+            save_last_sent_message_id(
+                target_id=publication.target.peer_id,
+                telegram_message_id=sent_message.id,
+            )
+        except (OSError, RuntimeError, ValueError) as state_error:
+            print(
+                "[ПРЕДУПРЕЖДЕНИЕ] Сообщение отправлено, но состояние "
+                f"порога новых сообщений не сохранено: {state_error}"
             )
 
         append_history(

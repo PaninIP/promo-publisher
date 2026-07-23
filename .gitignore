@@ -22,6 +22,8 @@ data/message_state.json
 data/message_state.json.tmp
 data/publication_history.jsonl
 data/runtime_state.json
+data/message_gate_state.json
+data/message_gate_state.json.tmp
 
 # IDE
 .vscode/
