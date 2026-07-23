@@ -14,6 +14,8 @@ DEFAULTS = RuntimeSettings(
     publication_delay_max_seconds=30,
     publication_interval_min_minutes=60,
     publication_interval_max_minutes=90,
+    publication_message_gate_enabled=True,
+    publication_min_new_messages=10,
     telegram_folder_name="Реклама",
     promo_bot_username="@example_bot",
 )
@@ -37,6 +39,8 @@ class RemoteSettingsTests(unittest.TestCase):
                     "PUBLICATION_DELAY_MAX_SECONDS=70",
                     "PUBLICATION_INTERVAL_MIN_MINUTES=120",
                     "PUBLICATION_INTERVAL_MAX_MINUTES=150",
+                    "PUBLICATION_MESSAGE_GATE_ENABLED=false",
+                    "PUBLICATION_MIN_NEW_MESSAGES=25",
                 ]
             ),
             marker="promo-publisher-config",
@@ -46,6 +50,8 @@ class RemoteSettingsTests(unittest.TestCase):
         self.assertEqual(settings.publication_delay_max_seconds, 70)
         self.assertEqual(settings.publication_interval_min_minutes, 120)
         self.assertEqual(settings.publication_interval_max_minutes, 150)
+        self.assertFalse(settings.publication_message_gate_enabled)
+        self.assertEqual(settings.publication_min_new_messages, 25)
 
     def test_secret_keys_are_rejected(self) -> None:
         with self.assertRaises(RemoteConfigError):

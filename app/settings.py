@@ -15,6 +15,8 @@ REMOTE_ALLOWED_KEYS = frozenset(
         "PUBLICATION_DELAY_MAX_SECONDS",
         "PUBLICATION_INTERVAL_MIN_MINUTES",
         "PUBLICATION_INTERVAL_MAX_MINUTES",
+        "PUBLICATION_MESSAGE_GATE_ENABLED",
+        "PUBLICATION_MIN_NEW_MESSAGES",
         "TELEGRAM_FOLDER_NAME",
         "PROMO_BOT_USERNAME",
     }
@@ -50,6 +52,8 @@ class RuntimeSettings:
     publication_delay_max_seconds: int
     publication_interval_min_minutes: int
     publication_interval_max_minutes: int
+    publication_message_gate_enabled: bool
+    publication_min_new_messages: int
     telegram_folder_name: str
     promo_bot_username: str
 
@@ -156,6 +160,11 @@ def validate_settings(settings: RuntimeSettings) -> RuntimeSettings:
             "PUBLICATION_INTERVAL_MIN_MINUTES"
         )
 
+    if settings.publication_min_new_messages < 1:
+        raise RuntimeError(
+            "PUBLICATION_MIN_NEW_MESSAGES должен быть не меньше 1"
+        )
+
     folder_name = settings.telegram_folder_name.strip()
 
     if not folder_name:
@@ -194,6 +203,14 @@ def load_default_settings() -> RuntimeSettings:
             publication_interval_max_minutes=get_integer_env(
                 "PUBLICATION_INTERVAL_MAX_MINUTES",
                 default=90,
+            ),
+            publication_message_gate_enabled=get_boolean_env(
+                "PUBLICATION_MESSAGE_GATE_ENABLED",
+                default=True,
+            ),
+            publication_min_new_messages=get_integer_env(
+                "PUBLICATION_MIN_NEW_MESSAGES",
+                default=10,
             ),
             telegram_folder_name=get_required_env(
                 "TELEGRAM_FOLDER_NAME"
@@ -300,6 +317,15 @@ def apply_remote_overrides(
             ),
         )
 
+    if "PUBLICATION_MESSAGE_GATE_ENABLED" in values:
+        settings = replace(
+            settings,
+            publication_message_gate_enabled=parse_boolean(
+                values["PUBLICATION_MESSAGE_GATE_ENABLED"],
+                setting_name="PUBLICATION_MESSAGE_GATE_ENABLED",
+            ),
+        )
+
     integer_fields = {
         "PUBLICATION_DELAY_MIN_SECONDS": (
             "publication_delay_min_seconds"
@@ -312,6 +338,9 @@ def apply_remote_overrides(
         ),
         "PUBLICATION_INTERVAL_MAX_MINUTES": (
             "publication_interval_max_minutes"
+        ),
+        "PUBLICATION_MIN_NEW_MESSAGES": (
+            "publication_min_new_messages"
         ),
     }
 
@@ -457,6 +486,14 @@ def format_settings(loaded: LoadedSettings) -> str:
             "Интервал между циклами: "
             f"{settings.publication_interval_min_minutes}–"
             f"{settings.publication_interval_max_minutes} мин."
+        ),
+        (
+            "Порог новых сообщений: "
+            + (
+                str(settings.publication_min_new_messages)
+                if settings.publication_message_gate_enabled
+                else "отключён"
+            )
         ),
         f'Папка Telegram: "{settings.telegram_folder_name}"',
         f"Рекламируемый бот: {settings.promo_bot_username}",

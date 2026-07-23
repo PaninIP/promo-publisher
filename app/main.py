@@ -218,6 +218,10 @@ async def run_single_cycle(
     print("=" * 60)
     print("Цикл публикации завершён")
     print(f"Успешно: {summary.successful}")
+    print(
+        "Ожидают новых сообщений: "
+        f"{summary.skipped_by_message_gate}"
+    )
     print(f"Ошибок: {summary.failed}")
 
     if summary.aborted_reason:
