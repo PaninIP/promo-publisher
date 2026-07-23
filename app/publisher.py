@@ -1,128 +1,353 @@
+from __future__ import annotations
+
 import asyncio
-import os
+import json
+import random
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
-from dotenv import load_dotenv
-from telethon import TelegramClient
-from telethon.tl.types import Channel, Chat, User
+from telethon import TelegramClient, errors
+
+from app.folder_targets import PublicationTarget
+from app.messages import (
+    PromoMessage,
+    choose_message,
+    save_sent_message,
+)
 
 
-load_dotenv()
+HISTORY_PATH = Path("data/publication_history.jsonl")
+
+# Публикации в личные сообщения и каналы пока запрещены.
+ALLOWED_TARGET_KINDS = frozenset(
+    {
+        "group",
+        "supergroup",
+    }
+)
 
 
-def get_required_env(name: str) -> str:
-    value = os.getenv(name)
+@dataclass(frozen=True)
+class PlannedPublication:
+    target: PublicationTarget
+    message: PromoMessage
+    rendered_text: str
 
-    if not value:
+
+@dataclass
+class PublicationSummary:
+    successful: int = 0
+    failed: int = 0
+    aborted_reason: str | None = None
+
+
+def normalize_bot_username(value: str) -> str:
+    username = value.strip()
+
+    if not username:
         raise RuntimeError(
-            f"Не задана обязательная переменная окружения: {name}"
+            "PROMO_BOT_USERNAME не может быть пустым"
         )
 
-    return value
+    if not username.startswith("@"):
+        username = f"@{username}"
+
+    return username
 
 
-def get_entity_type(entity: object) -> str:
-    if isinstance(entity, User):
-        return "Личный пользователь"
+def filter_allowed_targets(
+    targets: list[PublicationTarget],
+) -> tuple[
+    list[PublicationTarget],
+    list[PublicationTarget],
+]:
+    allowed: list[PublicationTarget] = []
+    skipped: list[PublicationTarget] = []
 
-    if isinstance(entity, Chat):
-        return "Обычная группа"
+    for target in targets:
+        if target.kind in ALLOWED_TARGET_KINDS:
+            allowed.append(target)
+        else:
+            skipped.append(target)
 
-    if isinstance(entity, Channel):
-        if entity.broadcast:
-            return "Канал"
-
-        if entity.megagroup:
-            return "Супергруппа"
-
-        return "Telegram-канал или группа"
-
-    return type(entity).__name__
+    return allowed, skipped
 
 
-def get_entity_name(entity: object) -> str:
-    if isinstance(entity, User):
-        full_name = " ".join(
-            part
-            for part in [
-                entity.first_name,
-                entity.last_name,
-            ]
-            if part
+def build_publication_plan(
+    targets: list[PublicationTarget],
+    messages: list[PromoMessage],
+    bot_username: str,
+) -> list[PlannedPublication]:
+    if not targets:
+        return []
+
+    if not messages:
+        raise RuntimeError(
+            "Список рекламных сообщений пуст"
         )
 
-        return full_name or entity.username or str(entity.id)
+    plan: list[PlannedPublication] = []
 
-    return (
-        getattr(entity, "title", None)
-        or getattr(entity, "username", None)
-        or str(getattr(entity, "id", "неизвестно"))
-    )
+    for target in targets:
+        selected_message = choose_message(
+            messages=messages,
+            target=target.peer_id,
+        )
+
+        plan.append(
+            PlannedPublication(
+                target=target,
+                message=selected_message,
+                rendered_text=selected_message.render(
+                    bot_username=bot_username,
+                ),
+            )
+        )
+
+    return plan
 
 
-async def main() -> None:
-    api_id = int(get_required_env("TELEGRAM_API_ID"))
-    api_hash = get_required_env("TELEGRAM_API_HASH")
-    session_path = Path(
-        get_required_env("TELEGRAM_SESSION_PATH")
-    )
+def print_publication_plan(
+    plan: list[PlannedPublication],
+) -> None:
+    print()
+    print("План публикации")
+    print("=" * 90)
 
-    target_chat_id = int(
-        get_required_env("TARGET_CHAT_ID")
-    )
+    for number, publication in enumerate(
+        plan,
+        start=1,
+    ):
+        print()
+        print(
+            f"{number}. {publication.target.name}"
+        )
+        print(
+            f"Тип: {publication.target.kind}"
+        )
+        print(
+            f"ID: {publication.target.peer_id}"
+        )
+        print(
+            f"Шаблон: {publication.message.id}"
+        )
+        print("-" * 90)
+        print(publication.rendered_text)
+        print("=" * 90)
 
-    promo_message = get_required_env("PROMO_MESSAGE")
+    print()
+    print(f"Публикаций в плане: {len(plan)}")
 
-    client = TelegramClient(
-        session=str(session_path),
-        api_id=api_id,
-        api_hash=api_hash,
+
+def append_history(
+    *,
+    publication: PlannedPublication,
+    status: str,
+    telegram_message_id: int | None = None,
+    error: str | None = None,
+) -> None:
+    record = {
+        "created_at": datetime.now(
+            timezone.utc
+        ).isoformat(),
+        "target_id": publication.target.peer_id,
+        "target_name": publication.target.name,
+        "target_kind": publication.target.kind,
+        "template_id": publication.message.id,
+        "status": status,
+        "telegram_message_id": telegram_message_id,
+        "error": error,
+    }
+
+    HISTORY_PATH.parent.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
     try:
-        await client.connect()
+        with HISTORY_PATH.open(
+            mode="a",
+            encoding="utf-8",
+        ) as history_file:
+            history_file.write(
+                json.dumps(
+                    record,
+                    ensure_ascii=False,
+                )
+            )
+            history_file.write("\n")
 
-        if not await client.is_user_authorized():
-            raise RuntimeError(
-                "Telegram-сессия не авторизована"
+    except OSError as history_error:
+        print(
+            "[ПРЕДУПРЕЖДЕНИЕ] "
+            "Не удалось записать журнал: "
+            f"{history_error}"
+        )
+
+
+async def publish_plan(
+    *,
+    client: TelegramClient,
+    plan: list[PlannedPublication],
+    delay_min_seconds: int,
+    delay_max_seconds: int,
+) -> PublicationSummary:
+    if delay_min_seconds < 0:
+        raise ValueError(
+            "Минимальная пауза не может быть отрицательной"
+        )
+
+    if delay_max_seconds < delay_min_seconds:
+        raise ValueError(
+            "Максимальная пауза не может быть меньше минимальной"
+        )
+
+    summary = PublicationSummary()
+
+    for index, publication in enumerate(plan):
+        if index > 0:
+            delay = random.randint(
+                delay_min_seconds,
+                delay_max_seconds,
             )
 
-        entity = await client.get_entity(target_chat_id)
+            print()
+            print(
+                f"Пауза перед следующей публикацией: "
+                f"{delay} сек."
+            )
 
-        entity_type = get_entity_type(entity)
-        entity_name = get_entity_name(entity)
+            await asyncio.sleep(delay)
 
         print()
-        print(f"Получатель: {entity_name}")
-        print(f"Тип: {entity_type}")
-        print(f"ID: {target_chat_id}")
-        print()
-        print("Сообщение:")
-        print(promo_message)
-        print()
+        print(
+            f"[ОТПРАВКА] {publication.target.name} "
+            f"({publication.target.peer_id})"
+        )
 
-        confirmation = input(
-            'Для отправки введи слово "ОТПРАВИТЬ": '
-        ).strip()
+        try:
+            sent_message = await client.send_message(
+                entity=publication.target.peer,
+                message=publication.rendered_text,
+                link_preview=False,
+            )
 
-        if confirmation != "ОТПРАВИТЬ":
-            print("Отправка отменена.")
-            return
+        except errors.SlowModeWaitError as error:
+            summary.failed += 1
 
-        sent_message = await client.send_message(
-            entity=entity,
-            message=promo_message,
-            link_preview=False,
+            error_text = (
+                "В чате действует медленный режим. "
+                f"Повторная отправка возможна через "
+                f"{error.seconds} сек."
+            )
+
+            append_history(
+                publication=publication,
+                status="slow_mode_wait",
+                error=error_text,
+            )
+
+            print(
+                f"[ПРОПУЩЕНО] "
+                f"{publication.target.name}: "
+                f"{error_text}"
+            )
+
+            continue
+
+        except errors.FloodWaitError as error:
+            summary.failed += 1
+
+            error_text = (
+                "Telegram потребовал остановить запросы "
+                f"на {error.seconds} сек."
+            )
+
+            summary.aborted_reason = error_text
+
+            append_history(
+                publication=publication,
+                status="flood_wait",
+                error=error_text,
+            )
+
+            print(
+                f"[ОСТАНОВКА] {error_text}"
+            )
+
+            break
+
+        except errors.RPCError as error:
+            summary.failed += 1
+
+            error_text = (
+                f"{type(error).__name__}: {error}"
+            )
+
+            append_history(
+                publication=publication,
+                status="telegram_error",
+                error=error_text,
+            )
+
+            print(
+                f"[ОШИБКА TELEGRAM] "
+                f"{publication.target.name}: "
+                f"{error_text}"
+            )
+
+            continue
+
+        except (
+            ValueError,
+            ConnectionError,
+            TimeoutError,
+        ) as error:
+            summary.failed += 1
+
+            error_text = (
+                f"{type(error).__name__}: {error}"
+            )
+
+            append_history(
+                publication=publication,
+                status="client_error",
+                error=error_text,
+            )
+
+            print(
+                f"[ОШИБКА] "
+                f"{publication.target.name}: "
+                f"{error_text}"
+            )
+
+            continue
+
+        summary.successful += 1
+
+        try:
+            save_sent_message(
+                target=publication.target.peer_id,
+                message_id=publication.message.id,
+            )
+        except OSError as state_error:
+            print(
+                "[ПРЕДУПРЕЖДЕНИЕ] "
+                "Сообщение отправлено, но состояние "
+                f"шаблонов не сохранено: {state_error}"
+            )
+
+        append_history(
+            publication=publication,
+            status="sent",
+            telegram_message_id=sent_message.id,
         )
 
         print(
-            f"Сообщение отправлено. "
-            f"ID сообщения: {sent_message.id}"
+            f"[ГОТОВО] {publication.target.name}: "
+            f"шаблон {publication.message.id}, "
+            f"Telegram message ID {sent_message.id}"
         )
 
-    finally:
-        await client.disconnect()
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    return summary
