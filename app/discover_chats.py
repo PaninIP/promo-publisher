@@ -39,7 +39,7 @@ async def main() -> None:
         if not await client.is_user_authorized():
             raise RuntimeError(
                 "Telegram-сессия не авторизована. "
-                "Сначала запусти app.main."
+                "Сначала запусти: uv run python -m app.auth"
             )
 
         print()

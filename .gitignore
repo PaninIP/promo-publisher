@@ -3,7 +3,7 @@
 __pycache__/
 *.py[cod]
 
-# Environment
+# Environment and secrets
 .env
 
 # Telegram authorization
@@ -12,9 +12,12 @@ __pycache__/
 *.session-shm
 *.session-wal
 
-# Runtime state
+# Runtime state and logs
 data/message_state.json
 data/publication_history.json
+data/publication_history.jsonl
+data/runtime_state.json
+*.log
 
 # IDE
 .vscode/

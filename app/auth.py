@@ -63,15 +63,8 @@ async def main() -> None:
             display_name or current_user.username or current_user.id,
         )
 
-        await client.send_message(
-            entity="me",
-            message=(
-                "✅ Promo Publisher успешно подключён.\n\n"
-                "Это тестовое сообщение отправлено скриптом."
-            ),
-        )
+        print("Сессия Telegram готова к работе.")
 
-        print("Тестовое сообщение отправлено в «Избранное».")
 
     finally:
         await client.disconnect()
