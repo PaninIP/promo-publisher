@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,17 +16,12 @@ from app.messages import (
     choose_message,
     save_sent_message,
 )
+from app.settings import LoadedSettings, RemoteConfigError
 
 
 HISTORY_PATH = Path("data/publication_history.jsonl")
-
-# Публикации в личные сообщения и каналы пока запрещены.
-ALLOWED_TARGET_KINDS = frozenset(
-    {
-        "group",
-        "supergroup",
-    }
-)
+ALLOWED_TARGET_KINDS = frozenset({"group", "supergroup"})
+SettingsLoader = Callable[[], Awaitable[LoadedSettings]]
 
 
 @dataclass(frozen=True)
@@ -40,28 +36,12 @@ class PublicationSummary:
     successful: int = 0
     failed: int = 0
     aborted_reason: str | None = None
-
-
-def normalize_bot_username(value: str) -> str:
-    username = value.strip()
-
-    if not username:
-        raise RuntimeError(
-            "PROMO_BOT_USERNAME не может быть пустым"
-        )
-
-    if not username.startswith("@"):
-        username = f"@{username}"
-
-    return username
+    disabled_by_config: bool = False
 
 
 def filter_allowed_targets(
     targets: list[PublicationTarget],
-) -> tuple[
-    list[PublicationTarget],
-    list[PublicationTarget],
-]:
+) -> tuple[list[PublicationTarget], list[PublicationTarget]]:
     allowed: list[PublicationTarget] = []
     skipped: list[PublicationTarget] = []
 
@@ -83,9 +63,7 @@ def build_publication_plan(
         return []
 
     if not messages:
-        raise RuntimeError(
-            "Список рекламных сообщений пуст"
-        )
+        raise RuntimeError("Список рекламных сообщений пуст")
 
     plan: list[PlannedPublication] = []
 
@@ -94,7 +72,6 @@ def build_publication_plan(
             messages=messages,
             target=target.peer_id,
         )
-
         plan.append(
             PlannedPublication(
                 target=target,
@@ -108,30 +85,17 @@ def build_publication_plan(
     return plan
 
 
-def print_publication_plan(
-    plan: list[PlannedPublication],
-) -> None:
+def print_publication_plan(plan: list[PlannedPublication]) -> None:
     print()
     print("План публикации")
     print("=" * 90)
 
-    for number, publication in enumerate(
-        plan,
-        start=1,
-    ):
+    for number, publication in enumerate(plan, start=1):
         print()
-        print(
-            f"{number}. {publication.target.name}"
-        )
-        print(
-            f"Тип: {publication.target.kind}"
-        )
-        print(
-            f"ID: {publication.target.peer_id}"
-        )
-        print(
-            f"Шаблон: {publication.message.id}"
-        )
+        print(f"{number}. {publication.target.name}")
+        print(f"Тип: {publication.target.kind}")
+        print(f"ID: {publication.target.peer_id}")
+        print(f"Шаблон: {publication.message.id}")
         print("-" * 90)
         print(publication.rendered_text)
         print("=" * 90)
@@ -148,9 +112,7 @@ def append_history(
     error: str | None = None,
 ) -> None:
     record = {
-        "created_at": datetime.now(
-            timezone.utc
-        ).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
         "target_id": publication.target.peer_id,
         "target_name": publication.target.name,
         "target_kind": publication.target.kind,
@@ -160,65 +122,145 @@ def append_history(
         "error": error,
     }
 
-    HISTORY_PATH.parent.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     try:
-        with HISTORY_PATH.open(
-            mode="a",
-            encoding="utf-8",
-        ) as history_file:
-            history_file.write(
-                json.dumps(
-                    record,
-                    ensure_ascii=False,
-                )
-            )
+        with HISTORY_PATH.open(mode="a", encoding="utf-8") as history_file:
+            history_file.write(json.dumps(record, ensure_ascii=False))
             history_file.write("\n")
-
     except OSError as history_error:
         print(
-            "[ПРЕДУПРЕЖДЕНИЕ] "
-            "Не удалось записать журнал: "
+            "[ПРЕДУПРЕЖДЕНИЕ] Не удалось записать журнал: "
             f"{history_error}"
         )
+
+
+async def load_active_settings(
+    settings_loader: SettingsLoader,
+) -> LoadedSettings:
+    try:
+        loaded = await settings_loader()
+    except RemoteConfigError:
+        raise
+    except Exception as error:
+        raise RemoteConfigError(
+            "Не удалось обновить рабочую конфигурацию"
+        ) from error
+
+    return loaded
+
+
+async def interruptible_delay(
+    *,
+    total_seconds: int,
+    settings_loader: SettingsLoader,
+    check_every_seconds: int,
+) -> bool:
+    """Ждёт паузу и возвращает False, если публикации отключены."""
+
+    remaining = total_seconds
+
+    while remaining > 0:
+        loaded = await load_active_settings(settings_loader)
+
+        if not loaded.settings.publication_enabled:
+            return False
+
+        sleep_seconds = min(check_every_seconds, remaining)
+        await asyncio.sleep(sleep_seconds)
+        remaining -= sleep_seconds
+
+    return True
 
 
 async def publish_plan(
     *,
     client: TelegramClient,
     plan: list[PlannedPublication],
-    delay_min_seconds: int,
-    delay_max_seconds: int,
+    settings_loader: SettingsLoader,
+    config_check_seconds: int = 5,
 ) -> PublicationSummary:
-    if delay_min_seconds < 0:
-        raise ValueError(
-            "Минимальная пауза не может быть отрицательной"
-        )
-
-    if delay_max_seconds < delay_min_seconds:
-        raise ValueError(
-            "Максимальная пауза не может быть меньше минимальной"
-        )
+    if config_check_seconds < 1:
+        raise ValueError("config_check_seconds должен быть больше нуля")
 
     summary = PublicationSummary()
 
     for index, publication in enumerate(plan):
+        try:
+            loaded = await load_active_settings(settings_loader)
+        except RemoteConfigError as error:
+            summary.aborted_reason = (
+                "Конфигурация недоступна или некорректна: "
+                f"{error}"
+            )
+            print(f"[ОСТАНОВКА] {summary.aborted_reason}")
+            break
+
+        settings = loaded.settings
+
+        if not settings.publication_enabled:
+            summary.disabled_by_config = True
+            summary.aborted_reason = (
+                "Публикации отключены параметром "
+                "PUBLICATION_ENABLED=false"
+            )
+            append_history(
+                publication=publication,
+                status="disabled_by_config",
+                error=summary.aborted_reason,
+            )
+            print(f"[ОСТАНОВКА] {summary.aborted_reason}")
+            break
+
         if index > 0:
             delay = random.randint(
-                delay_min_seconds,
-                delay_max_seconds,
+                settings.publication_delay_min_seconds,
+                settings.publication_delay_max_seconds,
             )
-
             print()
-            print(
-                f"Пауза перед следующей публикацией: "
-                f"{delay} сек."
-            )
+            print(f"Пауза перед следующей публикацией: {delay} сек.")
 
-            await asyncio.sleep(delay)
+            try:
+                delay_completed = await interruptible_delay(
+                    total_seconds=delay,
+                    settings_loader=settings_loader,
+                    check_every_seconds=config_check_seconds,
+                )
+            except RemoteConfigError as error:
+                summary.aborted_reason = (
+                    "Конфигурация недоступна во время ожидания: "
+                    f"{error}"
+                )
+                print(f"[ОСТАНОВКА] {summary.aborted_reason}")
+                break
+
+            if not delay_completed:
+                summary.disabled_by_config = True
+                summary.aborted_reason = (
+                    "Публикации отключены параметром "
+                    "PUBLICATION_ENABLED=false"
+                )
+                print(f"[ОСТАНОВКА] {summary.aborted_reason}")
+                break
+
+            try:
+                loaded = await load_active_settings(settings_loader)
+            except RemoteConfigError as error:
+                summary.aborted_reason = (
+                    "Конфигурация недоступна перед отправкой: "
+                    f"{error}"
+                )
+                print(f"[ОСТАНОВКА] {summary.aborted_reason}")
+                break
+
+            if not loaded.settings.publication_enabled:
+                summary.disabled_by_config = True
+                summary.aborted_reason = (
+                    "Публикации отключены параметром "
+                    "PUBLICATION_ENABLED=false"
+                )
+                print(f"[ОСТАНОВКА] {summary.aborted_reason}")
+                break
 
         print()
         print(
@@ -232,96 +274,57 @@ async def publish_plan(
                 message=publication.rendered_text,
                 link_preview=False,
             )
-
         except errors.SlowModeWaitError as error:
             summary.failed += 1
-
             error_text = (
                 "В чате действует медленный режим. "
-                f"Повторная отправка возможна через "
-                f"{error.seconds} сек."
+                f"Повторная отправка возможна через {error.seconds} сек."
             )
-
             append_history(
                 publication=publication,
                 status="slow_mode_wait",
                 error=error_text,
             )
-
             print(
-                f"[ПРОПУЩЕНО] "
-                f"{publication.target.name}: "
-                f"{error_text}"
+                f"[ПРОПУЩЕНО] {publication.target.name}: {error_text}"
             )
-
             continue
-
         except errors.FloodWaitError as error:
             summary.failed += 1
-
             error_text = (
                 "Telegram потребовал остановить запросы "
                 f"на {error.seconds} сек."
             )
-
             summary.aborted_reason = error_text
-
             append_history(
                 publication=publication,
                 status="flood_wait",
                 error=error_text,
             )
-
-            print(
-                f"[ОСТАНОВКА] {error_text}"
-            )
-
+            print(f"[ОСТАНОВКА] {error_text}")
             break
-
         except errors.RPCError as error:
             summary.failed += 1
-
-            error_text = (
-                f"{type(error).__name__}: {error}"
-            )
-
+            error_text = f"{type(error).__name__}: {error}"
             append_history(
                 publication=publication,
                 status="telegram_error",
                 error=error_text,
             )
-
             print(
-                f"[ОШИБКА TELEGRAM] "
-                f"{publication.target.name}: "
+                f"[ОШИБКА TELEGRAM] {publication.target.name}: "
                 f"{error_text}"
             )
-
             continue
-
-        except (
-            ValueError,
-            ConnectionError,
-            TimeoutError,
-        ) as error:
+        except (ValueError, ConnectionError, TimeoutError) as error:
             summary.failed += 1
-
-            error_text = (
-                f"{type(error).__name__}: {error}"
-            )
-
+            error_text = f"{type(error).__name__}: {error}"
             append_history(
                 publication=publication,
                 status="client_error",
                 error=error_text,
             )
-
-            print(
-                f"[ОШИБКА] "
-                f"{publication.target.name}: "
-                f"{error_text}"
-            )
-
+            print(f"[ОШИБКА] {publication.target.name}: {error_text}")
             continue
 
         summary.successful += 1
@@ -333,8 +336,7 @@ async def publish_plan(
             )
         except OSError as state_error:
             print(
-                "[ПРЕДУПРЕЖДЕНИЕ] "
-                "Сообщение отправлено, но состояние "
+                "[ПРЕДУПРЕЖДЕНИЕ] Сообщение отправлено, но состояние "
                 f"шаблонов не сохранено: {state_error}"
             )
 
@@ -343,7 +345,6 @@ async def publish_plan(
             status="sent",
             telegram_message_id=sent_message.id,
         )
-
         print(
             f"[ГОТОВО] {publication.target.name}: "
             f"шаблон {publication.message.id}, "
